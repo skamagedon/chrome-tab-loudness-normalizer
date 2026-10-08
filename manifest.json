@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Loudness Normalizer",
+  "description": "Compresses the active Chrome tab audio so speech is easier to hear and action peaks are tamed.",
+  "version": "2.2.0",
+  "permissions": ["activeTab", "offscreen", "scripting", "storage", "tabCapture"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["fullscreen_assist.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "action": {
+    "default_title": "Toggle loudness normalization for this tab"
+  },
+  "minimum_chrome_version": "116"
+}
