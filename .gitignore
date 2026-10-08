@@ -1,0 +1,6 @@
+# Build output
+*.zip
+
+# Windows
+Thumbs.db
+desktop.ini

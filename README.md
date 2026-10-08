@@ -6,10 +6,26 @@ It captures the active tab's audio, runs it through a dialogue-focused compresso
 
 ## Install
 
-1. Open `chrome://extensions`.
-2. Turn on **Developer mode**.
-3. Click **Load unpacked**.
-4. Select this folder: `chrome-tab-loudness-normalizer`.
+Not on the Chrome Web Store yet, so it installs as an unpacked extension. That takes about a minute.
+
+1. Download the latest `chrome-tab-loudness-normalizer-x.y.z.zip` from the
+   [Releases page](https://github.com/skamagedon/chrome-tab-loudness-normalizer/releases).
+2. Unzip it somewhere you will keep it. Chrome loads the extension from this folder
+   every time it starts, so do not unzip to a temp directory and delete it afterwards.
+3. Open `chrome://extensions`.
+4. Turn on **Developer mode**, top right.
+5. Click **Load unpacked** and select the unzipped folder, the one containing `manifest.json`.
+6. Pin the extension so the button is visible: click the puzzle-piece icon in the toolbar,
+   then the pin next to **Tab Loudness Normalizer**.
+
+Chrome will warn that the extension can "read and change all your data on all websites."
+That is real, and the [Permissions](#permissions-and-privacy) section explains exactly
+what each permission is for and why it is that broad.
+
+Chrome also shows a "Disable developer mode extensions" prompt on startup. That is
+unavoidable for unpacked extensions and is not specific to this one.
+
+Requires Chrome 116 or newer.
 
 ## Use
 
@@ -28,6 +44,30 @@ Version `2.2.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscree
 - The fullscreen assist script loads as a real all-frame content script, so late player frames get a chance to participate instead of relying on one-time injection.
 - Fullscreen state is read from `document.fullscreenElement` in the top frame and broadcast to the other frames. Earlier builds inferred it from window dimensions, which also matched a merely *maximized* window, so the assist would crop the video inside a normal windowed page while Chrome's own UI was still on screen. There is no dimension test that separates maximized from fullscreen across taskbar and display-scaling setups, so it does not try.
 - While normalization is on, `Shift+F` does one of two things depending on where you are. Not in fullscreen yet: it enters fullscreen on the player container. Already in fullscreen: it cycles the picture through `native` (untouched), `fill`, and three zoom steps. `Esc` returns to `native`. Turning the normalizer on starts in `fill`.
+
+## Permissions and privacy
+
+No audio is recorded, stored, or transmitted. No analytics, no telemetry, no network
+requests of any kind. The extension has no server and nothing to send data to. Audio is
+captured, passed through Web Audio nodes in memory, and played straight back out. When
+you toggle it off, the stream's tracks are stopped and the `AudioContext` is closed.
+
+Every permission and why it is needed:
+
+| Permission | Why |
+| --- | --- |
+| `tabCapture` | The whole point. Captures the active tab's audio stream so it can be compressed. |
+| `offscreen` | A Manifest V3 service worker cannot hold an `AudioContext`, so the audio graph lives in an offscreen document. |
+| `activeTab` | Grants access to the tab you clicked the button on, so processing can start there. |
+| `scripting` | Injects the fullscreen assist into tabs that were already open before the extension loaded. |
+| `storage` | Remembers which tab is active and which fill mode is selected, in session storage. Cleared when Chrome closes. |
+| `host_permissions: <all_urls>` | The fullscreen assist has to run on whatever streaming site you use, and the extension does not ship a hardcoded list of sites. |
+
+`<all_urls>` is the broadest permission Chrome offers and it is fair to be wary of it.
+The honest tradeoff is that a site allowlist would be narrower but would silently fail
+on any service not on the list. Everything the content script does is in
+[`fullscreen_assist.js`](fullscreen_assist.js); it reads video element dimensions and
+sets CSS properties, and that is all.
 
 ## Why the 1.x fullscreen assist did nothing
 
@@ -65,3 +105,8 @@ Good starting compressor settings:
 - Release: `200-300 ms`
 - Auto makeup gain: on, or manually add `+4 dB`
 - Add a limiter after it with ceiling around `-3 dB`
+
+## License
+
+MIT. See [LICENSE](LICENSE). Contributions welcome via issues and pull requests at
+https://github.com/skamagedon/chrome-tab-loudness-normalizer
