@@ -48,6 +48,25 @@ Version `2.4.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscree
 - `Shift+V` fullscreens the `<video>` element directly instead of its container. The UA stylesheet forces the fullscreen element to fill the screen, so this cannot be defeated by page layout, at the cost of the site's own controls and subtitles.
 - While normalization is on, `Shift+F` does one of two things depending on where you are. Not in fullscreen yet: it enters fullscreen on the player container. Already in fullscreen: it cycles the picture through `native` (untouched), `fill`, and three zoom steps. `Esc` returns to `native`. Turning the normalizer on starts in `fill`.
 
+## Fullscreen does not work while the normalizer is on
+
+This is a Chromium design decision, not a bug in this extension, and it cannot be fixed
+in extension code.
+
+Audio tab capture increments the **visible** capturer count
+(`stay_hidden=false` in `ForwardingAudioStreamFactory::LoopbackStreamStarted`). Any tab
+that is being visibly captured has page-requested fullscreen diverted into
+"fullscreen within tab" by `FullscreenController::MaybeToggleFullscreenWithinTab`, and
+`EnterFullscreenModeForTab` then returns early with the comment *"the browser window
+fullscreen state is unchanged"*. The page is told it is fullscreen and the video fills
+the tab, but Chrome's own UI stays on screen.
+
+**Workaround: press `F11` first, then turn the normalizer on.** `F11` is browser
+fullscreen, a separate code path that capture does not affect. With Chrome's UI gone the
+page viewport is the whole screen, and the fill mode makes the video cover it.
+
+Full source-level walkthrough: [docs/FULLSCREEN_AND_TAB_CAPTURE.md](docs/FULLSCREEN_AND_TAB_CAPTURE.md).
+
 ## Permissions and privacy
 
 No audio is recorded, stored, or transmitted. No analytics, no telemetry, no network
