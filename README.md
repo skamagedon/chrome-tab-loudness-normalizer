@@ -34,7 +34,7 @@ Requires Chrome 116 or newer.
 3. Click the extension icon once. The badge shows `ON`.
 4. Click it again to turn processing off.
 
-Version `2.2.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscreen assist, which never worked in 1.x. See below.
+Version `2.4.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscreen assist, which never worked in 1.x. See below.
 
 ## Notes
 
@@ -43,6 +43,9 @@ Version `2.2.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscree
 - There is a small latency cost because Chrome is routing the tab through the Web Audio API.
 - The fullscreen assist script loads as a real all-frame content script, so late player frames get a chance to participate instead of relying on one-time injection.
 - Fullscreen state is read from `document.fullscreenElement` in the top frame and broadcast to the other frames. Earlier builds inferred it from window dimensions, which also matched a merely *maximized* window, so the assist would crop the video inside a normal windowed page while Chrome's own UI was still on screen. There is no dimension test that separates maximized from fullscreen across taskbar and display-scaling setups, so it does not try.
+- The assist writes exactly two CSS properties on the video, `object-fit` and `object-view-box`, and nothing else. Builds before 2.4.0 also stamped `position: fixed`, `inset`, `100vw/100vh` and `z-index: 2147483647` whenever the video was not itself the fullscreen element. That fired on the `fullscreenchange` event, while the site's player was still mid-transition, and tore the video out of flow underneath the player's own layout code. On Disney+ it stopped fullscreen working altogether: fullscreen worked with the extension off and failed with it on. Geometry is no longer touched at all.
+- `Shift+D` toggles an on-screen diagnostic readout, parented inside the fullscreen element so it stays visible in fullscreen.
+- `Shift+V` fullscreens the `<video>` element directly instead of its container. The UA stylesheet forces the fullscreen element to fill the screen, so this cannot be defeated by page layout, at the cost of the site's own controls and subtitles.
 - While normalization is on, `Shift+F` does one of two things depending on where you are. Not in fullscreen yet: it enters fullscreen on the player container. Already in fullscreen: it cycles the picture through `native` (untouched), `fill`, and three zoom steps. `Esc` returns to `native`. Turning the normalizer on starts in `fill`.
 
 ## Permissions and privacy

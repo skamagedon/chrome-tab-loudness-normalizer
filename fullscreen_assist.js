@@ -1,6 +1,6 @@
 (() => {
   const KEY = "__tabLoudnessNormalizerFullscreenAssist";
-  const VERSION = "2.3.0";
+  const VERSION = "2.4.0";
 
   // Chrome's UA stylesheet (blink/renderer/core/css/fullscreen.css) stamps
   // position, inset, width, height, min/max-width, min/max-height, margin and
@@ -22,6 +22,8 @@
       observer: undefined,
       writing: false,
       rafId: 0,
+      timeoutId: 0,
+      scheduled: false,
       // Set from the top frame's broadcast. Only consulted inside iframes.
       ancestorFullscreen: false,
       lastFullscreenError: "none",
@@ -84,12 +86,27 @@
       schedule();
     }
 
+    // rAF alone is not reliable here. Browsers throttle or suspend it whenever
+    // the page is not being rendered, and a fullscreen transition is exactly
+    // the moment rendering is in flux. Race a timer against it so a suspended
+    // rAF cannot strand the state; whichever fires first wins and cancels the
+    // other.
     function schedule() {
-      if (state.rafId) return;
-      state.rafId = requestAnimationFrame(() => {
+      if (state.scheduled) return;
+      state.scheduled = true;
+
+      const run = () => {
+        if (!state.scheduled) return;
+        state.scheduled = false;
+        cancelAnimationFrame(state.rafId);
+        clearTimeout(state.timeoutId);
         state.rafId = 0;
+        state.timeoutId = 0;
         apply();
-      });
+      };
+
+      state.rafId = requestAnimationFrame(run);
+      state.timeoutId = setTimeout(run, 100);
     }
 
     // The old build decided "are we fullscreen" from window.outerWidth against
@@ -134,26 +151,23 @@
         return;
       }
 
-      const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-
       state.writing = true;
       try {
         remember(video);
 
-        // Geometry is only ours to set when the video is NOT the fullscreen
-        // element. When it is, the UA owns every one of these properties.
-        if (video !== fullscreenElement) {
-          set(video, "position", "fixed");
-          set(video, "inset", "0");
-          set(video, "width", "100vw");
-          set(video, "height", "100vh");
-          set(video, "max-width", "100vw");
-          set(video, "max-height", "100vh");
-          set(video, "margin", "0");
-          set(video, "z-index", "2147483647");
-          set(video, "background", "black");
-        }
-
+        // NO GEOMETRY. Earlier builds stamped position:fixed, inset, 100vw/100vh
+        // and z-index:2147483647 onto the video whenever it was not itself the
+        // fullscreen element. That fired on the fullscreenchange event, which is
+        // while the site's player is still mid-transition, and it tore the video
+        // out of flow underneath the player's own layout code. On Disney+ that
+        // stopped fullscreen working at all: it worked with the extension off
+        // and failed with it on. It also covered the player's controls with an
+        // opaque black box at the top of the stacking order.
+        //
+        // object-fit and object-view-box are enough. They are the only
+        // properties Chrome's UA fullscreen rules leave overridable, they are
+        // the only ones that had any effect in the first place, and neither
+        // changes the element's box, so neither can disturb the player's layout.
         set(video, "object-fit", "cover");
 
         const zoom = ZOOM[state.mode] || 1;
@@ -417,19 +431,37 @@
       return videos;
     }
 
+    // The only two properties this script ever writes. Remember and restore
+    // exactly these, rather than snapshotting and rewriting the whole style
+    // attribute: players rewrite inline styles on the video constantly, and
+    // restoring a stale snapshot wiped whatever the player had set since.
+    const OWNED = ["object-fit", "object-view-box"];
+
     function remember(element) {
       if (state.styled.has(element)) return;
-      state.styled.set(element, element.getAttribute("style"));
+      const saved = {};
+      for (const property of OWNED) {
+        saved[property] = {
+          value: element.style.getPropertyValue(property),
+          priority: element.style.getPropertyPriority(property),
+        };
+      }
+      state.styled.set(element, saved);
     }
 
     function restore() {
       stopObserving();
       state.writing = true;
       try {
-        for (const [element, original] of state.styled) {
+        for (const [element, saved] of state.styled) {
           if (!element.isConnected) continue;
-          if (original === null) element.removeAttribute("style");
-          else element.setAttribute("style", original);
+          for (const property of OWNED) {
+            element.style.removeProperty(property);
+            const original = saved[property];
+            if (original && original.value) {
+              element.style.setProperty(property, original.value, original.priority);
+            }
+          }
         }
       } finally {
         state.writing = false;
