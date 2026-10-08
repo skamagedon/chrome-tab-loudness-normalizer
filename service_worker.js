@@ -32,6 +32,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  // F11 browser fullscreen does not set document.fullscreenElement, so a
+  // content script cannot see it. Every dimension-based guess at it also
+  // matched a merely maximized window. chrome.windows.get returns the literal
+  // window state, so ask Chrome instead of inferring. No extra permission is
+  // needed for this; only reading tab URLs would require "tabs".
+  if (message.type === "windowstate") {
+    const tabId = sender.tab?.id;
+    const windowId = sender.tab?.windowId;
+    if (windowId === undefined) return false;
+
+    chrome.windows
+      .get(windowId)
+      .then((win) => {
+        const browserFullscreen = win.state === "fullscreen";
+        sendResponse({ state: win.state, browserFullscreen });
+        // Relay to every frame, so iframes learn it without asking themselves.
+        if (tabId !== undefined) {
+          chrome.tabs
+            .sendMessage(tabId, {
+              target: "fullscreen-assist",
+              type: "windowstate",
+              browserFullscreen,
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => sendResponse({ state: "unknown", browserFullscreen: false }));
+
+    return true;
+  }
+
   // Shift+F arrives in whichever frame has focus, which is usually not the
   // frame holding the video. Advance the mode centrally and relay it to every
   // frame in the tab.

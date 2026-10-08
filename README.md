@@ -34,7 +34,7 @@ Requires Chrome 116 or newer.
 3. Click the extension icon once. The badge shows `ON`.
 4. Click it again to turn processing off.
 
-Version `2.4.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscreen assist, which never worked in 1.x. See below.
+Version `2.5.0` keeps the 1.3.0 audio chain unchanged and rewrites the fullscreen assist, which never worked in 1.x. See below.
 
 ## Notes
 
@@ -61,9 +61,15 @@ that is being visibly captured has page-requested fullscreen diverted into
 fullscreen state is unchanged"*. The page is told it is fullscreen and the video fills
 the tab, but Chrome's own UI stays on screen.
 
-**Workaround: press `F11` first, then turn the normalizer on.** `F11` is browser
-fullscreen, a separate code path that capture does not affect. With Chrome's UI gone the
-page viewport is the whole screen, and the fill mode makes the video cover it.
+**Use `F11`.** `F11` is browser fullscreen, a separate code path that capture does not
+affect, confirmed working with the normalizer on. With Chrome's UI gone the page viewport
+is the whole screen, and the fill mode makes the video cover it.
+
+The extension detects `F11` by asking the browser outright: the service worker calls
+`chrome.windows.get()` and reports whether `state === "fullscreen"`. It does not infer
+this from `innerHeight` against `screen.height`, because every version of that
+comparison also matched a merely maximized window and cropped the video inside an
+ordinary windowed page. The extension never changes your window state itself.
 
 Full source-level walkthrough: [docs/FULLSCREEN_AND_TAB_CAPTURE.md](docs/FULLSCREEN_AND_TAB_CAPTURE.md).
 

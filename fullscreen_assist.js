@@ -1,6 +1,6 @@
 (() => {
   const KEY = "__tabLoudnessNormalizerFullscreenAssist";
-  const VERSION = "2.4.0";
+  const VERSION = "2.5.0";
 
   // Chrome's UA stylesheet (blink/renderer/core/css/fullscreen.css) stamps
   // position, inset, width, height, min/max-width, min/max-height, margin and
@@ -26,6 +26,7 @@
       scheduled: false,
       // Set from the top frame's broadcast. Only consulted inside iframes.
       ancestorFullscreen: false,
+      browserFullscreen: false,
       lastFullscreenError: "none",
       debugEl: undefined,
       debugTimer: 0,
@@ -35,7 +36,9 @@
 
     document.addEventListener("fullscreenchange", onFullscreenChange, true);
     document.addEventListener("webkitfullscreenchange", onFullscreenChange, true);
-    window.addEventListener("resize", schedule, true);
+    // F11 fires a resize but sets no fullscreen element, so a resize is the
+    // cue to re-ask Chrome what the window state actually is.
+    window.addEventListener("resize", onResize, true);
     document.addEventListener("keydown", handleKeydown, true);
 
     chrome.runtime.onMessage.addListener((message) => {
@@ -45,6 +48,9 @@
         setMode(message.mode);
       } else if (message.type === "fsstate") {
         state.ancestorFullscreen = !!message.active;
+        schedule();
+      } else if (message.type === "windowstate") {
+        state.browserFullscreen = !!message.browserFullscreen;
         schedule();
       } else if (message.type === "disable") {
         disable();
@@ -69,7 +75,31 @@
     function enable(mode) {
       state.enabled = true;
       if (mode) state.mode = mode;
+      requestWindowState();
       schedule();
+    }
+
+    function onResize() {
+      requestWindowState();
+      schedule();
+    }
+
+    // Only the service worker can call chrome.windows.get. Ask it, rather than
+    // inferring browser fullscreen from innerHeight against screen.height:
+    // every version of that comparison also matched a maximized window.
+    function requestWindowState() {
+      chrome.runtime
+        .sendMessage({ target: "fullscreen-assist", type: "windowstate" })
+        .then((response) => {
+          if (!response) return;
+          const next = !!response.browserFullscreen;
+          if (next !== state.browserFullscreen) {
+            state.browserFullscreen = next;
+            schedule();
+          }
+          state.windowState = response.state;
+        })
+        .catch(() => {});
     }
 
     function disable() {
@@ -124,14 +154,16 @@
     function isFullscreenHere() {
       if (hasNativeFullscreen()) return true;
 
-      // In the top frame the API answer is complete. No fullscreen element
-      // means nothing in this tab is fullscreen, full stop.
-      if (IS_TOP_FRAME) return false;
+      // In the top frame the answer is complete without guessing: either the
+      // page is fullscreen (checked above) or the window is, and the window
+      // state comes from chrome.windows.get via the service worker rather than
+      // from any dimension comparison.
+      if (IS_TOP_FRAME) return state.browserFullscreen;
 
       // In an iframe we cannot read the parent's fullscreen state across
-      // origins, so combine the top frame's broadcast with a tight size check:
-      // a frame an ancestor fullscreened gets a viewport the size of the screen.
-      if (!state.ancestorFullscreen) return false;
+      // origins, so combine the broadcast state with a tight size check: a
+      // frame filling a fullscreen window gets a screen-sized viewport.
+      if (!state.ancestorFullscreen && !state.browserFullscreen) return false;
 
       const sw = screen.width || 0;
       const sh = screen.height || 0;
@@ -523,6 +555,7 @@
         "enabled / mode   " + p.enabled + " / " + p.mode,
         "nativeFullscreen " + p.nativeFullscreen,
         "ancestorFS       " + p.ancestorFullscreen,
+        "browserFS (F11)  " + p.browserFullscreen + "   windowState=" + p.windowState,
         "fullscreenHere   " + p.fullscreenHere + (p.fullscreenHere ? "   <-- styles applied" : "   <-- styles NOT applied"),
         "fsElement        " + p.fullscreenElement,
         "videoIsFsElement " + p.videoIsFullscreenElement,
@@ -571,6 +604,8 @@
         mode: state.mode,
         nativeFullscreen: hasNativeFullscreen(),
         ancestorFullscreen: state.ancestorFullscreen,
+        browserFullscreen: state.browserFullscreen,
+        windowState: state.windowState || "unknown",
         fullscreenHere: isFullscreenHere(),
         fullscreenElement: fsEl ? fsEl.tagName + "." + String(fsEl.className).slice(0, 50) : null,
         videoIsFullscreenElement: !!video && video === fsEl,
