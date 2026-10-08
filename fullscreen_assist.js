@@ -1,5 +1,6 @@
 (() => {
   const KEY = "__tabLoudnessNormalizerFullscreenAssist";
+  const VERSION = "2.3.0";
 
   // Chrome's UA stylesheet (blink/renderer/core/css/fullscreen.css) stamps
   // position, inset, width, height, min/max-width, min/max-height, margin and
@@ -23,9 +24,12 @@
       rafId: 0,
       // Set from the top frame's broadcast. Only consulted inside iframes.
       ancestorFullscreen: false,
+      lastFullscreenError: "none",
+      debugEl: undefined,
+      debugTimer: 0,
     };
 
-    window[KEY] = { enable, disable, setMode, probe };
+    window[KEY] = { enable, disable, setMode, probe, debug: toggleDebugOverlay };
 
     document.addEventListener("fullscreenchange", onFullscreenChange, true);
     document.addEventListener("webkitfullscreenchange", onFullscreenChange, true);
@@ -197,6 +201,45 @@
         return;
       }
 
+      // Shift+D: on-screen diagnostic readout. Exists because reading this
+      // state through DevTools means picking the right frame first, and the
+      // frame that matters is usually not the one DevTools opens on.
+      if (event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleDebugOverlay();
+        return;
+      }
+
+      // Shift+V: fullscreen the <video> element itself rather than its
+      // container. The UA stylesheet forces the fullscreen element to fill the
+      // screen with !important, so this cannot be defeated by a transformed
+      // ancestor or a container that sizes itself wrong. The cost is the site's
+      // own controls and subtitle layer, which are siblings of the video and so
+      // are not rendered inside its fullscreen subtree.
+      if (event.shiftKey && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        event.stopPropagation();
+        const video = findLargestVisibleVideo();
+        if (!video) return;
+        if (hasNativeFullscreen()) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) {
+            try {
+              const done = exit.call(document);
+              if (done && done.then) {
+                done.then(() => fullscreenElement(video)).catch(() => {});
+                return;
+              }
+            } catch {
+              /* fall through and try directly */
+            }
+          }
+        }
+        fullscreenElement(video);
+        return;
+      }
+
       if (event.shiftKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         event.stopPropagation();
@@ -229,34 +272,87 @@
       if (!video) return false;
 
       const target = choosePlayerRoot(video);
+      return fullscreenElement(target, video);
+    }
+
+    // Records why a request failed so the Shift+D readout can show it, since a
+    // rejected fullscreen request is otherwise completely silent.
+    function fullscreenElement(target, fallback) {
       const request =
         target.requestFullscreen ||
         target.webkitRequestFullscreen ||
         target.webkitRequestFullScreen;
-      if (!request) return false;
-
-      try {
-        const result = request.call(target);
-        if (result && result.catch) {
-          result.catch(() => {
-            // Sandboxed or allow="fullscreen"-less iframes reject this. Fall
-            // back to the top of this frame's own document.
-            const root = document.documentElement;
-            const rootRequest = root.requestFullscreen || root.webkitRequestFullscreen;
-            if (rootRequest && target !== root) {
-              try {
-                const retry = rootRequest.call(root);
-                if (retry && retry.catch) retry.catch(() => {});
-              } catch {
-                /* nothing further to try from here */
-              }
-            }
-          });
-        }
-        return true;
-      } catch {
+      if (!request) {
+        state.lastFullscreenError = "no requestFullscreen on target";
         return false;
       }
+
+      try {
+        state.lastFullscreenError = "pending";
+        const result = request.call(target);
+        if (result && result.then) {
+          result
+            .then(() => {
+              state.lastFullscreenError = "ok";
+            })
+            .catch((error) => {
+              state.lastFullscreenError = (error && error.name) || "rejected";
+              // Sandboxed iframes and iframes without allow="fullscreen" reject
+              // this. Try the bare video, then this frame's documentElement.
+              const next = fallback && fallback !== target ? fallback : document.documentElement;
+              if (next && next !== target) {
+                const retry =
+                  next.requestFullscreen || next.webkitRequestFullscreen;
+                if (retry) {
+                  try {
+                    const again = retry.call(next);
+                    if (again && again.catch) {
+                      again.catch((e2) => {
+                        state.lastFullscreenError =
+                          "both rejected: " + ((e2 && e2.name) || "unknown");
+                      });
+                    }
+                  } catch {
+                    /* nothing further to try from here */
+                  }
+                }
+              }
+            });
+        }
+        return true;
+      } catch (error) {
+        state.lastFullscreenError = "threw: " + ((error && error.name) || "unknown");
+        return false;
+      }
+    }
+
+    // position: fixed is relative to the viewport only if no ancestor creates a
+    // containing block. transform, filter, backdrop-filter, perspective,
+    // will-change on those, and contain: paint/layout/strict all do. Video
+    // players use them constantly for compositing, and when one is present the
+    // stamped 100vw/100vh box lands relative to that ancestor instead of the
+    // screen. This is the prime suspect for "fills the old content area".
+    function findContainingBlockAncestor(video) {
+      let node = video.parentElement;
+      while (node && node !== document.documentElement) {
+        const cs = getComputedStyle(node);
+        const reasons = [];
+        if (cs.transform && cs.transform !== "none") reasons.push("transform");
+        if (cs.filter && cs.filter !== "none") reasons.push("filter");
+        if (cs.backdropFilter && cs.backdropFilter !== "none") reasons.push("backdrop-filter");
+        if (cs.perspective && cs.perspective !== "none") reasons.push("perspective");
+        if (cs.contain && /paint|layout|strict|content/.test(cs.contain)) reasons.push("contain:" + cs.contain);
+        if (cs.willChange && /transform|filter|perspective/.test(cs.willChange)) reasons.push("will-change:" + cs.willChange);
+        if (reasons.length) {
+          return {
+            tag: node.tagName.toLowerCase(),
+            cls: String(node.className || "").slice(0, 60),
+            reasons: reasons.join(", "),
+          };
+        }
+        node = node.parentElement;
+      }
+      return null;
     }
 
     // Fullscreening the player's container rather than the bare <video> keeps
@@ -341,12 +437,101 @@
       state.styled.clear();
     }
 
+    function toggleDebugOverlay() {
+      if (state.debugEl) {
+        state.debugEl.remove();
+        state.debugEl = undefined;
+        clearInterval(state.debugTimer);
+        state.debugTimer = 0;
+        return;
+      }
+
+      const el = document.createElement("div");
+      el.style.cssText = [
+        "position:fixed",
+        "top:8px",
+        "left:8px",
+        "z-index:2147483647",
+        "background:rgba(0,0,0,.88)",
+        "color:#0f0",
+        "font:12px/1.45 Consolas,monospace",
+        "padding:10px 12px",
+        "border:1px solid #0f0",
+        "border-radius:4px",
+        "white-space:pre",
+        "pointer-events:none",
+        "max-width:92vw",
+        "max-height:92vh",
+        "overflow:hidden",
+      ].join(";");
+      state.debugEl = el;
+      mountDebugOverlay();
+      renderDebug();
+      state.debugTimer = setInterval(() => {
+        mountDebugOverlay();
+        renderDebug();
+      }, 400);
+    }
+
+    // In fullscreen, only the fullscreen element's subtree is rendered. An
+    // overlay parented to <body> is simply invisible, so it has to be moved
+    // inside whatever element is currently fullscreen.
+    function mountDebugOverlay() {
+      if (!state.debugEl) return;
+      const host = document.fullscreenElement || document.webkitFullscreenElement || document.body;
+      if (host && state.debugEl.parentNode !== host) host.appendChild(state.debugEl);
+    }
+
+    function renderDebug() {
+      if (!state.debugEl) return;
+      const p = probe();
+      const lines = [
+        "TAB LOUDNESS NORMALIZER " + VERSION + "  [Shift+D to hide]",
+        "frame            " + (p.topFrame ? "TOP" : "IFRAME") + "  " + shorten(p.frame),
+        "enabled / mode   " + p.enabled + " / " + p.mode,
+        "nativeFullscreen " + p.nativeFullscreen,
+        "ancestorFS       " + p.ancestorFullscreen,
+        "fullscreenHere   " + p.fullscreenHere + (p.fullscreenHere ? "   <-- styles applied" : "   <-- styles NOT applied"),
+        "fsElement        " + p.fullscreenElement,
+        "videoIsFsElement " + p.videoIsFullscreenElement,
+        "lastFSrequest    " + p.lastFullscreenError,
+        "viewport         " + p.viewport.join(" x "),
+        "screen           " + p.screen.join(" x "),
+      ];
+      if (p.video) {
+        lines.push(
+          "video box        " + p.video.box.map(Math.round).join(" x "),
+          "video intrinsic  " + p.video.intrinsic.join(" x "),
+          "object-fit       " + p.video.objectFit,
+          "object-view-box  " + p.video.objectViewBox,
+          "video position   " + p.video.position,
+          "in shadow DOM    " + p.video.inShadowDOM,
+        );
+      } else {
+        lines.push("video            NONE FOUND IN THIS FRAME");
+      }
+      lines.push(
+        "fixed-pos broken " +
+          (p.containingBlock
+            ? "YES by <" + p.containingBlock.tag + " class=" + p.containingBlock.cls + "> (" + p.containingBlock.reasons + ")"
+            : "no"),
+      );
+      state.debugEl.textContent = lines.join("\n");
+    }
+
+    function shorten(url) {
+      return url.length > 58 ? url.slice(0, 55) + "..." : url;
+    }
+
     // Diagnostic hook. In the page console, with the frame selector on the
     // player frame:  window.__tabLoudnessNormalizerFullscreenAssist.probe()
     function probe() {
       const video = findLargestVisibleVideo();
-      const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+      // Named fsEl, not fullscreenElement, so it does not shadow the
+      // fullscreenElement() helper declared above.
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
       const rect = video && video.getBoundingClientRect();
+      const cs = video && getComputedStyle(video);
       return {
         frame: location.href,
         topFrame: IS_TOP_FRAME,
@@ -355,16 +540,18 @@
         nativeFullscreen: hasNativeFullscreen(),
         ancestorFullscreen: state.ancestorFullscreen,
         fullscreenHere: isFullscreenHere(),
-        fullscreenElement: fullscreenElement
-          ? fullscreenElement.tagName + "." + fullscreenElement.className
-          : null,
-        videoIsFullscreenElement: !!video && video === fullscreenElement,
+        fullscreenElement: fsEl ? fsEl.tagName + "." + String(fsEl.className).slice(0, 50) : null,
+        videoIsFullscreenElement: !!video && video === fsEl,
+        lastFullscreenError: state.lastFullscreenError,
         viewport: [window.innerWidth, window.innerHeight],
+        screen: [screen.width, screen.height],
+        containingBlock: video ? findContainingBlockAncestor(video) : null,
         video: video && {
           box: [rect.width, rect.height],
           intrinsic: [video.videoWidth, video.videoHeight],
-          objectFit: getComputedStyle(video).objectFit,
-          objectViewBox: getComputedStyle(video).objectViewBox,
+          objectFit: cs.objectFit,
+          objectViewBox: cs.objectViewBox,
+          position: cs.position,
           inShadowDOM: video.getRootNode() !== document,
         },
       };
